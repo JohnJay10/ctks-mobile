@@ -1,0 +1,319 @@
+import React, { useState, useEffect } from 'react';
+import { 
+  View, 
+  Text, 
+  TextInput, 
+  TouchableOpacity, 
+  StyleSheet, 
+  ActivityIndicator, 
+  Alert,
+  Image,
+  KeyboardAvoidingView,
+  Platform
+} from 'react-native';
+import { useForm, Controller } from 'react-hook-form';
+import { yupResolver } from '@hookform/resolvers/yup';
+import * as yup from 'yup';
+import { useAuth } from '../auth/AuthContext';
+import { useNavigation } from '@react-navigation/native';
+import { StackNavigationProp } from '@react-navigation/stack';
+
+type RootStackParamList = {
+  AdminHome: undefined;
+  VendorHome: undefined;
+  VendorLogin: undefined;
+  Login: undefined;
+};
+
+type LoginScreenNavigationProp = StackNavigationProp<RootStackParamList, 'Login'>;
+
+const schema = yup.object().shape({
+  username: yup.string().required('Username is required'),
+  password: yup.string().min(6, 'Password must be at least 6 characters').required('Password is required'),
+});
+
+type FormData = {
+  username: string;
+  password: string;
+};
+
+const LoginScreen = () => {
+  const { 
+    authState, 
+    onAdminLogin, 
+    onVendorLogin, 
+    onLogout, 
+    loading: authLoading 
+  } = useAuth();
+  const navigation = useNavigation<LoginScreenNavigationProp>();
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [loginType, setLoginType] = useState<'admin' | 'vendor'>('admin');
+
+  const { 
+    control, 
+    handleSubmit, 
+    formState: { errors },
+    reset
+  } = useForm<FormData>({
+    resolver: yupResolver(schema),
+    defaultValues: {
+      username: '',
+      password: ''
+    }
+  });
+
+  // Handle navigation after successful login
+  useEffect(() => {
+    if (authState.authenticated) {
+      if (authState.userType === 'admin') {
+        navigation.reset({
+          index: 0,
+          routes: [{ name: 'AdminHome' }],
+        });
+      } else if (authState.userType === 'vendor') {
+        navigation.reset({
+          index: 0,
+          routes: [{ name: 'VendorHome' }],
+        });
+      }
+    }
+  }, [authState.authenticated, authState.userType]);
+
+  const onSubmit = async (data: FormData) => {
+    try {
+      setIsSubmitting(true);
+      let success;
+
+      if (loginType === 'admin') {
+        success = await onAdminLogin(data.username, data.password);
+      } else {
+        success = await onVendorLogin(data.username, data.password);
+      }
+
+      if (!success) {
+        Alert.alert('Login Failed', 'Invalid credentials. Please try again.');
+      }
+    } catch (error) {
+      console.error('Login error:', error);
+      Alert.alert('Error', 'An error occurred during login. Please try again.');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const toggleLoginType = () => {
+    reset(); // Clear form when switching login types
+    setLoginType(prev => prev === 'admin' ? 'vendor' : 'admin');
+  };
+
+  if (authLoading) {
+    return (
+      <View style={styles.loadingContainer}>
+        <ActivityIndicator size="large" color="#2b6cb0" />
+      </View>
+    );
+  }
+
+  return (
+    <KeyboardAvoidingView
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      style={styles.container}
+    >
+      <View style={styles.content}>
+        {/* Logo and Header */}
+        <View style={styles.header}>
+          <Image
+            source={require('../../assets/logo.jpeg')}
+            style={styles.logo}
+            resizeMode="contain"
+          />
+          <Text style={styles.title}>
+            {loginType === 'admin' ? 'Admin Portal' : 'Vendor Portal'}
+          </Text>
+          <Text style={styles.subtitle}>Secure system access</Text>
+        </View>
+
+        {/* Login Form */}
+        <View style={styles.form}>
+          <Controller
+            control={control}
+            name="username"
+            render={({ field: { onChange, onBlur, value } }) => (
+              <View style={styles.inputContainer}>
+                <Text style={styles.label}>
+                  {loginType === 'admin' ? 'ADMIN USERNAME' : 'VENDOR EMAIL'}
+                </Text>
+                <TextInput
+                  style={[styles.input, errors.username && styles.inputError]}
+                  placeholder={
+                    loginType === 'admin' 
+                      ? 'Enter your username' 
+                      : 'Enter your email'
+                  }
+                  autoCapitalize="none"
+                  keyboardType={loginType === 'vendor' ? 'email-address' : 'default'}
+                  onBlur={onBlur}
+                  onChangeText={onChange}
+                  value={value}
+                />
+                {errors.username && (
+                  <Text style={styles.errorText}>{errors.username.message}</Text>
+                )}
+              </View>
+            )}
+          />
+
+          <Controller
+            control={control}
+            name="password"
+            render={({ field: { onChange, onBlur, value } }) => (
+              <View style={styles.inputContainer}>
+                <Text style={styles.label}>PASSWORD</Text>
+                <TextInput
+                  style={[styles.input, errors.password && styles.inputError]}
+                  placeholder="Enter your password"
+                  secureTextEntry={true}
+                  onBlur={onBlur}
+                  onChangeText={onChange}
+                  value={value}
+                />
+                {errors.password && (
+                  <Text style={styles.errorText}>{errors.password.message}</Text>
+                )}
+              </View>
+            )}
+          />
+
+          <TouchableOpacity 
+            style={[styles.loginButton, isSubmitting && styles.loginButtonDisabled]}
+            onPress={handleSubmit(onSubmit)}
+            disabled={isSubmitting || authLoading}
+          >
+            {isSubmitting ? (
+              <ActivityIndicator color="#fff" />
+            ) : (
+              <Text style={styles.loginButtonText}>SIGN IN</Text>
+            )}
+          </TouchableOpacity>
+        </View>
+
+        {/* Footer */}
+        <View style={styles.footer}>
+          <TouchableOpacity onPress={toggleLoginType}>
+            <Text style={styles.switchButtonText}>
+              {loginType === 'admin' 
+                ? 'VENDOR ACCESS →' 
+                : 'ADMIN ACCESS →'}
+            </Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    </KeyboardAvoidingView>
+  );
+};
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: '#f8fafc',
+  },
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  content: {
+    flex: 1,
+    padding: 32,
+    justifyContent: 'space-between',
+  },
+  header: {
+    alignItems: 'center',
+    marginTop: 40,
+  },
+  logo: {
+    width: 120,
+    height: 120,
+    marginBottom: 16,
+    borderRadius: 10,
+  },
+  title: {
+    fontSize: 24,
+    fontWeight: '700',
+    color: '#1a365d',
+    marginBottom: 8,
+    letterSpacing: 0.5,
+  },
+  subtitle: {
+    fontSize: 14,
+    color: '#718096',
+    fontWeight: '500',
+  },
+  form: {
+    marginTop: 40,
+  },
+  inputContainer: {
+    marginBottom: 24,
+  },
+  label: {
+    fontSize: 12,
+    color: '#4a5568',
+    marginBottom: 8,
+    fontWeight: '600',
+    textTransform: 'uppercase',
+    letterSpacing: 0.8,
+  },
+  input: {
+    height: 52,
+    borderWidth: 1.5,
+    borderColor: '#e2e8f0',
+    borderRadius: 8,
+    paddingHorizontal: 16,
+    fontSize: 16,
+    backgroundColor: '#ffffff',
+    color: '#1a202c',
+    fontWeight: '500',
+  },
+  inputError: {
+    borderColor: '#e53e3e',
+  },
+  errorText: {
+    color: '#e53e3e',
+    fontSize: 12,
+    marginTop: 6,
+    fontWeight: '500',
+  },
+  loginButton: {
+    height: 52,
+    backgroundColor: '#2b6cb0',
+    borderRadius: 8,
+    justifyContent: 'center',
+    alignItems: 'center',
+    shadowColor: '#2b6cb0',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.15,
+    shadowRadius: 6,
+    elevation: 3,
+  },
+  loginButtonDisabled: {
+    backgroundColor: '#a0aec0',
+  },
+  loginButtonText: {
+    color: '#ffffff',
+    fontSize: 15,
+    fontWeight: '700',
+    letterSpacing: 0.5,
+  },
+  footer: {
+    alignItems: 'center',
+    marginBottom: 20,
+  },
+  switchButtonText: {
+    color: '#4a5568',
+    fontSize: 13,
+    fontWeight: '600',
+    letterSpacing: 0.5,
+  },
+});
+
+export default LoginScreen;

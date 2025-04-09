@@ -2,9 +2,10 @@
   "expo": {
     "name": "CTKS-Mobile",
     "slug": "CTKS-Mobile",
+    "main": "/src/App.tsx",
     "version": "1.0.0",
     "orientation": "portrait",
-    "icon": "./assets/icon.png",
+    "icon": "./assets/logo.jpeg",
     "userInterfaceStyle": "light",
     "newArchEnabled": true,
     "splash": {
@@ -13,16 +14,50 @@
       "backgroundColor": "#ffffff"
     },
     "ios": {
+      
       "supportsTablet": true
     },
     "android": {
       "adaptiveIcon": {
-        "foregroundImage": "./assets/adaptive-icon.png",
+        "foregroundImage": "./assets/logo.jpeg",
         "backgroundColor": "#ffffff"
-      }
+      },
+      "package": "com.johnjay10.CTKSMobile"
     },
     "web": {
       "favicon": "./assets/favicon.png"
-    }
+    },
+    "plugins": [
+      "expo-secure-store",
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "enableProguardInReleaseBuilds": true,
+            "usesCleartextTraffic": true,
+            "packagingOptions": {
+              "pickFirst": [
+                "**/libc++_shared.so",
+                "**/libhermes.so"
+              ],
+              "exclude": ["META-INF/*"]
+            },
+            "buildProperties": {
+              "android.enableJetifier": true,
+              "android.useAndroidX": true
+            }
+          },
+          "ios": {
+            "useFrameworks": "static"
+          }
+        }
+      ]
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "360ba8fb-4207-4bb1-8860-aa230d17c761"
+      }
+    },
+    "owner": "johnjay10"
   }
 }
