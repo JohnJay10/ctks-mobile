@@ -1,13 +1,15 @@
 import { createContext, useContext, useState, useEffect } from 'react';
 import * as SecureStore from 'expo-secure-store';
-import axios, { AxiosInstance, AxiosError } from 'axios'; 
 import { Alert } from 'react-native';
+import api from '../services/api'; // Import your central API service
 
 interface UserData {
   id: string;
   username?: string;
   email?: string;
-  // Add other user properties as needed
+  role?: string;
+  approved?: boolean;
+  active?: boolean;
 }
 
 interface AuthState {
@@ -15,11 +17,12 @@ interface AuthState {
   authenticated: boolean | null;
   userType: 'admin' | 'vendor' | null;
   userData: UserData | null;
+  initialized: boolean;
 }
 
 interface AuthProps {
   user: UserData | null;
-  api: AxiosInstance;
+  api: any; // Use the imported api instance
   authState: AuthState;
   onAdminLogin: (username: string, password: string) => Promise<any>;
   onVendorLogin: (email: string, password: string) => Promise<any>;
@@ -28,7 +31,7 @@ interface AuthProps {
   initialized: boolean;
 }
 
-const TOKEN_KEY = 'auth-token';
+const TOKEN_KEY = 'auth-token'; 
 const USER_TYPE_KEY = 'user-type';
 const USER_DATA_KEY = 'user-data';
 
@@ -43,18 +46,12 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     token: null,
     authenticated: null,
     userType: null,
-    userData: null
+    userData: null,
+    initialized: false
   });
 
   const [loading, setLoading] = useState(false);
   const [initialized, setInitialized] = useState(false);
-
-  const LOCAL_IP = '192.168.13.50';
-  const api = axios.create({
-    baseURL: `http://${LOCAL_IP}:3000/api`,
-    timeout: 10000,
-    headers: { 'Content-Type': 'application/json' }    
-  });
 
   useEffect(() => {
     const loadAuthData = async () => {
@@ -66,25 +63,30 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
           SecureStore.getItemAsync(USER_DATA_KEY)
         ]);
 
+        console.log('🔐 Loading auth data:', { token: !!token, userType, userData: !!userData });
+
         if (token) {
-          api.defaults.headers.common['Authorization'] = `Bearer ${token}`;
+          // Token will be automatically set by the API interceptor
           setAuthState({
             token,
             authenticated: true,
             userType: userType as 'admin' | 'vendor' | null,
-            userData: userData ? JSON.parse(userData) : null
+            userData: userData ? JSON.parse(userData) : null,
+            initialized: true
           });
         } else {
           setAuthState(prev => ({
             ...prev,
-            authenticated: false
+            authenticated: false,
+            initialized: true
           }));
         }
       } catch (error) {
         console.error('Failed to load auth data', error);
         setAuthState(prev => ({
           ...prev,
-          authenticated: false
+          authenticated: false,
+          initialized: true
         }));
       } finally {
         setLoading(false);
@@ -98,13 +100,24 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
   const AdminLogin = async (username: string, password: string) => {
     try {
       setLoading(true);
+      console.log('🔐 Admin login attempt:', username);
+      
       const response = await api.post('/admin/login', { username, password });
+      
+      console.log('✅ Admin login response:', response.data);
       
       if (!response.data.token) {
         throw new Error('No token received');
       }
 
-      const userData = response.data.user || {};
+      const userData = {
+        id: response.data._id,
+        username: response.data.username,
+        role: response.data.role,
+        permissions: response.data.permissions,
+        active: response.data.active
+      };
+      
       const userDataString = JSON.stringify(userData);
 
       await Promise.all([
@@ -113,18 +126,16 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
         SecureStore.setItemAsync(USER_DATA_KEY, userDataString)
       ]);
 
-      api.defaults.headers.common['Authorization'] = `Bearer ${response.data.token}`;
-
       setAuthState({
         token: response.data.token,
         authenticated: true,
         userType: 'admin',
-        userData: userData
+        userData: userData,
+        initialized: true
       });
 
       return userData;
-    } catch (e) {
-      const error = e as AxiosError;
+    } catch (error: any) {
       console.error('Admin login error:', error.response?.data || error.message);
       
       let errorMsg = 'Invalid username or password';
@@ -144,13 +155,25 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
   const VendorLogin = async (email: string, password: string) => {
     try {
       setLoading(true);
+      console.log('🔐 Vendor login attempt:', email);
+      
       const response = await api.post('/vendor/login', { email, password });
+      
+      console.log('✅ Vendor login response:', response.data);
       
       if (!response.data.token) {
         throw new Error('No token received');
       }
 
-      const userData = response.data.user || {};
+      const userData = {
+        id: response.data._id,
+        username: response.data.username,
+        email: response.data.email,
+        role: response.data.role,
+        approved: response.data.approved,
+        active: response.data.active
+      };
+      
       const userDataString = JSON.stringify(userData);
 
       await Promise.all([
@@ -159,18 +182,16 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
         SecureStore.setItemAsync(USER_DATA_KEY, userDataString)
       ]);
 
-      api.defaults.headers.common['Authorization'] = `Bearer ${response.data.token}`;
-
       setAuthState({
         token: response.data.token,
         authenticated: true,
         userType: 'vendor',
-        userData: userData
+        userData: userData,
+        initialized: true
       });
 
       return userData;
-    } catch (e) {
-      const error = e as AxiosError;
+    } catch (error: any) {
       console.error('Vendor login error:', error.response?.data || error.message);
       
       let errorMsg = 'Invalid email or password';
@@ -196,13 +217,12 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
         SecureStore.deleteItemAsync(USER_DATA_KEY)
       ]);
 
-      delete api.defaults.headers.common['Authorization'];
-
       setAuthState({
         token: null,
         authenticated: false,
         userType: null,
-        userData: null
+        userData: null,
+        initialized: true
       });
     } catch (error) {
       console.error('Failed to logout', error);
@@ -214,7 +234,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
 
   const value = {
     user: authState.userData,
-    api,
+    api, // Use the imported api instance
     authState,
     onAdminLogin: AdminLogin,
     onVendorLogin: VendorLogin,

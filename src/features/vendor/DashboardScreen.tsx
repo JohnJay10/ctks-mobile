@@ -55,55 +55,69 @@ const VendorDashboard = () => {
     return `${Math.floor(diffInSeconds / 86400)} days ago`;
   };
 
-  const fetchDashboardData = async () => {
-    try {
-      setDashboardData(prev => ({ ...prev, loading: true }));
-      setRefreshing(true);
-      
-      // Fetch all vendor-specific data in parallel
-      const [customersRes, tokensRes, activitiesRes, pendingRes] = await Promise.all([
-        api.get('/vendor/getCustomerCount', {
-          headers: { Authorization: `Bearer ${authState.token}` }
-        }).catch(() => ({ data: { count: 0 } })),
-        api.get('/tokens/issuedtokencount', {
-          headers: { Authorization: `Bearer ${authState.token}` }
-        }).catch(() => ({ data: { count: 0 } })),
-        api.get('/vendor/activities', {
-          headers: { Authorization: `Bearer ${authState.token}` }   
-        }).catch(() => ({ data: [] })),
-        api.get('/vendor/getPendingRequestCount', {
-          headers: { Authorization: `Bearer ${authState.token}` }
-        }).catch(() => ({ data: { count: 0 } }))
-      ]);
-  
-      // Safely process activities data
-      const activitiesData = Array.isArray(activitiesRes.data) ? activitiesRes.data : [];
-      const formattedActivities = activitiesData.map((activity: any) => ({
-        id: activity._id || activity.id || Math.random().toString(),
-        action: getActivityAction(activity.type),
-        time: formatTime(activity.createdAt || new Date().toISOString()),
-        status: activity.status || 'pending',
-        type: activity.type || 'other'
-      }));
-  
-      setDashboardData({
-        totalCustomers: customersRes.data.count || 0,
-        availableTokens: tokensRes.data.count || 0,
-        pendingRequests: pendingRes.data.count || 0,
-        recentActivities: activitiesRes.data.activities,
-        loading: false
-      });
-  
-    } catch (error) {
-      console.error('Failed to fetch dashboard data:', error);
-      setDashboardData(prev => ({
-        ...prev,
-        loading: false
-      }));
-    } finally {
-      setRefreshing(false);
-    }
-  };
+ // In your VendorDashboard component
+const fetchDashboardData = async () => {
+  try {
+    setDashboardData(prev => ({ ...prev, loading: true }));
+    setRefreshing(true);
+    
+    console.log('🔄 Fetching vendor dashboard data...');
+
+    // Use the api from auth context (which is now the central api instance)
+    const [customersRes, tokensRes, activitiesRes, pendingRes] = await Promise.all([
+      api.get('/vendor/getCustomerCount').catch((error) => {
+        console.error('Customer count error:', error.response?.data || error.message);
+        return { data: { count: 0 } };
+      }),
+      api.get('/vendor/getIssuedTokenCount').catch((error) => {
+        console.error('Token count error:', error.response?.data || error.message);
+        return { data: { count: 0 } };
+      }),
+      api.get('/vendor/activities').catch((error) => {
+        console.error('Activities error:', error.response?.data || error.message);
+        return { data: { activities: [] } };
+      }),
+      api.get('/vendor/getPendingRequestCount').catch((error) => {
+        console.error('Pending requests error:', error.response?.data || error.message);
+        return { data: { count: 0 } };
+      })
+    ]);
+
+    console.log('📊 Dashboard data loaded:', {
+      customers: customersRes.data,
+      tokens: tokensRes.data,
+      activities: activitiesRes.data,
+      pending: pendingRes.data
+    });
+
+    // Process the data...
+    const activitiesData = activitiesRes.data?.activities || [];
+    const formattedActivities = activitiesData.map((activity: any) => ({
+      id: activity._id || activity.id || Math.random().toString(),
+      action: getActivityAction(activity.type),
+      time: formatTime(activity.createdAt || new Date().toISOString()),
+      status: activity.status || 'pending',
+      type: activity.type || 'other'
+    }));
+
+    setDashboardData({
+      totalCustomers: customersRes.data?.count || 0,
+      availableTokens: tokensRes.data?.count || 0,
+      pendingRequests: pendingRes.data?.count || 0,
+      recentActivities: formattedActivities,
+      loading: false
+    });
+
+  } catch (error) {
+    console.error('❌ Failed to fetch dashboard data:', error);
+    setDashboardData(prev => ({
+      ...prev,
+      loading: false
+    }));
+  } finally {
+    setRefreshing(false);
+  }
+};
 
   const getActivityAction = (type: string) => {
     switch (type) {
@@ -245,21 +259,7 @@ const VendorDashboard = () => {
             </View>
 
             <Text style={styles.sectionTitle}>Recent Activity</Text>
-            <Card style={styles.activityCard}>
-              {dashboardData.recentActivities.length > 0 ? (
-                dashboardData.recentActivities.map(activity => (
-                  <ActivityItem 
-                    key={activity.id}
-                    action={activity.action}
-                    time={activity.time}
-                    status={activity.status}
-                    type={activity.type}
-                  />
-                ))
-              ) : (
-                <Text style={styles.noActivitiesText}>No recent activities</Text>
-              )}
-            </Card>
+          
           </ScrollView>
         );
     }
@@ -378,6 +378,7 @@ const styles = StyleSheet.create({
   },
   contentContainer: {
     flex: 1,
+    marginBottom: 60, // Reserve space for the navigation
   },
   content: {
     padding: 16,
@@ -482,6 +483,13 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
     borderTopWidth: 1,
     borderTopColor: '#EEEEEE',
+    position: 'absolute', // Add absolute positioning
+    bottom: 0,            // Position at bottom
+    left: 0,              // Stretch full width
+    right: 0,
+    backgroundColor: 'white', // Ensure background color is set
+    height: 60,          // Set a fixed height
+    marginBottom: 10,    // Negative margin to move it up
   },
   navButton: {
     flex: 1,
@@ -497,6 +505,10 @@ const styles = StyleSheet.create({
     borderTopWidth: 2,
     borderTopColor: '#6200ee',
   },
+ 
+ 
 });
+
+
 
 export default VendorDashboard;

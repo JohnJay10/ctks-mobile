@@ -2,27 +2,30 @@
   "expo": {
     "name": "CTKS-Mobile",
     "slug": "CTKS-Mobile",
-    "main": "/src/App.tsx",
+  
     "version": "1.0.0",
     "orientation": "portrait",
-    "icon": "./assets/logo.jpeg",
+    "icon": "./assets/logo.png",
     "userInterfaceStyle": "light",
-    "newArchEnabled": true,
-    "splash": {
-      "image": "./assets/splash-icon.png",
-      "resizeMode": "contain",
-      "backgroundColor": "#ffffff"
+    "backgroundColor": "#ffffff",
+    "extra": {
+      "eas": {
+        "projectId": "d66734bf-8348-4290-8469-91d60d53c1fe"
+      }
     },
     "ios": {
-      
-      "supportsTablet": true
+      "supportsTablet": true,
+      "newArchEnabled": false
     },
     "android": {
       "adaptiveIcon": {
-        "foregroundImage": "./assets/logo.jpeg",
+        "foregroundImage": "./assets/logo.png",
         "backgroundColor": "#ffffff"
+       
       },
-      "package": "com.johnjay10.CTKSMobile"
+      "package": "com.johnjay100.CTKSMobile",
+      "softwareKeyboardLayoutMode": "resize",
+      "newArchEnabled": false
     },
     "web": {
       "favicon": "./assets/favicon.png"
@@ -35,29 +38,23 @@
           "android": {
             "enableProguardInReleaseBuilds": true,
             "usesCleartextTraffic": true,
+            "newArchEnabled": false,
             "packagingOptions": {
               "pickFirst": [
                 "**/libc++_shared.so",
                 "**/libhermes.so"
               ],
-              "exclude": ["META-INF/*"]
-            },
-            "buildProperties": {
-              "android.enableJetifier": true,
-              "android.useAndroidX": true
+              "exclude": [
+                "META-INF/*"
+              ]
             }
           },
           "ios": {
-            "useFrameworks": "static"
+            "useFrameworks": "static",
+            "newArchEnabled": false
           }
         }
       ]
-    ],
-    "extra": {
-      "eas": {
-        "projectId": "360ba8fb-4207-4bb1-8860-aa230d17c761"
-      }
-    },
-    "owner": "johnjay10"
+    ]
   }
 }

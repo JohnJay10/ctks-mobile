@@ -431,12 +431,19 @@ const styles = StyleSheet.create({
     color: '#9E9E9E',
     marginTop: 2,
   },
-  bottomNav: {
+   bottomNav: {
     flexDirection: 'row',
     justifyContent: 'space-around',
     paddingVertical: 8,
     borderTopWidth: 1,
     borderTopColor: '#EEEEEE',
+    position: 'absolute', // Add absolute positioning
+    bottom: 0,            // Position at bottom
+    left: 0,              // Stretch full width
+    right: 0,
+    backgroundColor: 'white', // Ensure background color is set
+    height: 60,          // Set a fixed height
+    marginBottom: 10,    // Negative margin to move it up
   },
   navButton: {
     flex: 1,

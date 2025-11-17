@@ -8,7 +8,9 @@ import {
   TextInput, 
   RefreshControl,
   Modal,
-  AppState
+  AppState,
+  Clipboard,
+  Linking
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { 
@@ -17,24 +19,27 @@ import {
   Card, 
   Button, 
   ActivityIndicator, 
-  List
+  List,
+  IconButton,
+  DataTable
 } from 'react-native-paper';
 import { useAuth } from '../../../auth/AuthContext';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
-import { Paystack } from 'react-native-paystack-webview';
 import axios from 'axios';
 
 interface Token {
   _id: string;
+  txRef: string;
   meterNumber: string;
   disco: string;
   units: number;
   amount: number;
-  tokenValue: string;
-  status: 'pending' | 'completed' | 'failed';
+  status: 'initiated' | 'pending' | 'completed' | 'failed' | 'issued' | 'rejected';
+  paymentMethod: 'manual' | 'bankTransfer';
+  paymentDetails?: string;
+  paymentDate?: string;
+  token?: string;
   createdAt: string;
-  paystackReference?: string;
-  paymentDetails?: any;
   customerVerification?: {
     MTK1?: string;
     MTK2?: string;
@@ -58,10 +63,17 @@ interface Customer {
   };
 }
 
+interface BankAccount {
+  accountNumber: string;
+  accountName: string;
+  bankName: string;
+  isActive: boolean;
+}
+
 const VendorTokenScreen = () => {
   const { colors } = useTheme();
   const { api, authState } = useAuth();
-  const [activeTab, setActiveTab] = useState<'request' | 'view'>('request');
+  const [activeTab, setActiveTab] = useState<'request' | 'view' | 'history'>('request');
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [tokens, setTokens] = useState<Token[]>([]);
@@ -76,9 +88,25 @@ const VendorTokenScreen = () => {
   const [showPaymentModal, setShowPaymentModal] = useState(false);
   const [tokenSearchQuery, setTokenSearchQuery] = useState('');
   const [filteredTokens, setFilteredTokens] = useState<Token[]>([]);
-  const [paystackReference, setPaystackReference] = useState('');
-  const [paystackAmount, setPaystackAmount] = useState(0);
-  const paystackWebViewRef = useRef<any>(null);
+  const [currentRequest, setCurrentRequest] = useState<Token | null>(null);
+  const [bankDetails, setBankDetails] = useState<BankAccount | null>(null);
+  const [loadingBankDetails, setLoadingBankDetails] = useState(true);
+
+  // Pagination state for request history
+  const [requestHistory, setRequestHistory] = useState<Token[]>([]);
+  const [issuedTokensHistory, setIssuedTokensHistory] = useState<Token[]>([]);
+  const [historyPage, setHistoryPage] = useState(1); // Start from page 1
+  const [issuedTokensPage, setIssuedTokensPage] = useState(1); // Start from page 1
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [issuedTokensLoading, setIssuedTokensLoading] = useState(false);
+  const [totalRequestHistory, setTotalRequestHistory] = useState(0);
+  const [totalIssuedTokens, setTotalIssuedTokens] = useState(0);
+  const itemsPerPage = 5;
+  
+
+  // Pagination state for token search
+  const [tokenSearchPage, setTokenSearchPage] = useState(0);
+  const [hasSearched, setHasSearched] = useState(false);
 
   const [formData, setFormData] = useState({
     meterNumber: '',
@@ -92,34 +120,125 @@ const VendorTokenScreen = () => {
     units: '',
   });
 
-  const fetchTokens = async () => {
+  const fetchBankAccount = async () => {
     try {
-      const response = await api.get('/tokens/fetchtoken', {
-        headers: { Authorization: `Bearer ${authState.token}` }   
+      setLoadingBankDetails(true);
+      const response = await api.get('/bank-accounts/accountno', {
+        headers: { Authorization: `Bearer ${authState.token}` }
       });
       
+      if (response.data.success && response.data.data) {
+        setBankDetails(response.data.data);
+      } else {
+        Alert.alert('Error', 'No active bank account found');
+        setBankDetails(null);
+      }
+    } catch (error) {
+      console.error('Failed to fetch bank account:', error);
+      Alert.alert('Error', 'Failed to load bank account details');
+      setBankDetails(null);
+    } finally {
+      setLoadingBankDetails(false);
+    }
+  };
+  const fetchTokens = async () => {
+    try {
+      // 1. First fetch all customers to verify meter numbers
       const customersResponse = await api.get('/vendor/getAllCustomers', {
         headers: { Authorization: `Bearer ${authState.token}` }   
       });
       
       const allCustomers = customersResponse.data?.data || [];
+      
+      // 2. Then fetch tokens with meter number filter
+      const response = await api.get('/tokens/fetchtoken', {
+        headers: { Authorization: `Bearer ${authState.token}` },
+        params: {
+          page: 1,
+          limit: 1000 // Temporary high limit to debug
+        }
+      });
+  
       const allTokens = response.data?.data || [];
       
-      const tokensWithVerification = allTokens.map((token: Token) => {
-        const customer = allCustomers.find((c: Customer) => c.meterNumber === token.meterNumber);
+      if (allTokens.length === 0) {
+        Alert.alert('Info', 'No issued tokens found for your account');
+        setTokens([]);
+        setFilteredTokens([]);
+        return;
+      }
+  
+      // 3. Match tokens with customers
+      const tokensWithVerification = allTokens.map((token) => {
+        const customer = allCustomers.find(c => c.meterNumber === token.meterNumber);
+        
+        if (!customer) {
+          console.warn(`No customer found for meter: ${token.meterNumber}`);
+        }
+        
         return {
           ...token,
-          customerVerification: customer?.verification || null
+          customerVerification: customer?.verification || 'unverified',
+          customerName: customer?.name || 'Unknown'
         };
       });
-      
+  
       setTokens(tokensWithVerification);
       setFilteredTokens(tokensWithVerification);
+  
     } catch (error) {
-      console.error('Failed to fetch tokens:', error);
-      Alert.alert('Error', 'Failed to load tokens');
+      console.error('Fetch error:', error.response?.data || error.message);
+      Alert.alert('Error', error.response?.data?.message || 'Failed to load tokens');
       setTokens([]);
       setFilteredTokens([]);
+    }
+  };
+
+  const fetchRequestHistory = async () => {
+    try {
+      setHistoryLoading(true);
+      const response = await api.get('/tokens/requesthistory', {
+        headers: { Authorization: `Bearer ${authState.token}` },
+        params: {
+          page: historyPage,
+          limit: itemsPerPage,
+          status: ['pending', 'rejected']
+        }
+      });
+      
+      setRequestHistory(response.data?.data || []);
+      setTotalRequestHistory(response.data?.total || 0);
+    } catch (error) {
+      console.error('Failed to fetch request history:', error);
+      Alert.alert('Error', 'Failed to load request history');
+      setRequestHistory([]);
+      setTotalRequestHistory(0);
+    } finally {
+      setHistoryLoading(false);
+    }
+  };
+
+  const fetchIssuedTokensHistory = async () => {
+    try {
+      setIssuedTokensLoading(true);
+      const response = await api.get('/tokens/fetchtoken', {
+        headers: { Authorization: `Bearer ${authState.token}` },
+        params: {
+          page: issuedTokensPage,
+          limit: itemsPerPage,
+          status: 'issued'
+        }
+      });
+      
+      setIssuedTokensHistory(response.data?.data || []);
+      setTotalIssuedTokens(response.data?.total || 0);
+    } catch (error) {
+      console.error('Failed to fetch issued tokens history:', error);
+      Alert.alert('Error', 'Failed to load issued tokens history');
+      setIssuedTokensHistory([]);
+      setTotalIssuedTokens(0);
+    } finally {
+      setIssuedTokensLoading(false);
     }
   };
 
@@ -165,13 +284,16 @@ const VendorTokenScreen = () => {
     try {
       setLoading(true);
       await fetchDiscoPricing();
+      await fetchBankAccount();
       
       const [customersResponse] = await Promise.all([
         api.get('/vendor/getAllCustomers', {
           headers: { Authorization: `Bearer ${authState.token}` },
           timeout: 10000
         }),
-        fetchTokens()
+        fetchTokens(),
+        fetchRequestHistory(),
+        fetchIssuedTokensHistory()
       ]);
 
       const allCustomers = customersResponse.data?.data || [];
@@ -222,21 +344,24 @@ const VendorTokenScreen = () => {
 
   const handleTokenSearch = () => {
     if (!tokenSearchQuery.trim()) {
-      setFilteredTokens(tokens);
+      setFilteredTokens(tokens); // Show all tokens when search is empty
+      setHasSearched(false);
       return;
     }
 
-    const filtered = (tokens || []).filter(token => 
-      token.meterNumber.includes(tokenSearchQuery) ||
-      (token.tokenValue && token.tokenValue.includes(tokenSearchQuery))
+    const filtered = tokens.filter(token => 
+      token.meterNumber.includes(tokenSearchQuery)
     );
 
     setFilteredTokens(filtered);
+    setTokenSearchPage(0);
+    setHasSearched(true);
   };
 
   const clearTokenSearch = () => {
     setTokenSearchQuery('');
-    setFilteredTokens(tokens);
+    setFilteredTokens([]);
+    setHasSearched(false);
   };
 
   useEffect(() => {
@@ -245,6 +370,13 @@ const VendorTokenScreen = () => {
     const subscription = AppState.addEventListener('change', handleAppStateChange);
     return () => subscription.remove();
   }, []);
+
+  useEffect(() => {
+    if (activeTab === 'history') {
+      fetchRequestHistory();
+      fetchIssuedTokensHistory();
+    }
+  }, [historyPage, issuedTokensPage, activeTab]);
 
   const handleAppStateChange = (nextAppState: string) => {
     if (nextAppState === 'background' && showPaymentModal) {
@@ -304,196 +436,414 @@ const VendorTokenScreen = () => {
     }
   
     setFormErrors(newErrors);
-    return valid;
+    return valid;   
   };
 
-  const initiatePaystackPayment = async () => {
+  const initiateManualPayment = async () => {
     if (!validateForm()) return;
-  
+
     try {
       setPaymentInProgress(true);
       const cleanedMeterNumber = formData.meterNumber.replace(/\D/g, '');
       const totalAmountNGN = calculateTotalAmount();
-      const totalAmountKobo = Math.round(totalAmountNGN );
 
       const response = await api.post('/tokens/request', {
         meterNumber: cleanedMeterNumber,
         units: Number(formData.units),
         disco: formData.disco,
         amount: totalAmountNGN,
-        email: authState.user?.email || 'customer@example.com'
+        paymentMethod: 'manual'
       }, {
         headers: { 
           Authorization: `Bearer ${authState.token}`,
           'Content-Type': 'application/json'
-        },
-        timeout: 30000
+        }
       });
-  
+
       if (response.data.success) {
-        setPaystackReference(response.data.reference);
-        setPaystackAmount(totalAmountKobo);
+        setCurrentRequest(response.data.request);
         setShowPaymentModal(true);
+        // Refresh history after new request
+        fetchRequestHistory();
       } else {
-        throw new Error(response.data.message || 'Payment initialization failed');
+        throw new Error(response.data.message || 'Token request failed');
       }
     } catch (error: any) {
-      console.error('Payment Error:', error);
+      console.error('Request Error:', error);
       Alert.alert(
-        'Payment Error',
-        error.response?.data?.message || error.message || 'Payment initialization failed'
+        'Error',
+        error.response?.data?.message || error.message || 'Token request failed'
       );
     } finally {
       setPaymentInProgress(false);
     }
   };
 
-const handlePaymentSuccess = async (response: any) => {
-  try {
-    setShowPaymentModal(false);
-    
-    // Verify payment
-    const verificationResponse = await api.get(`/tokens/verify?txRef=${paystackReference}`, {
-      headers: { Authorization: `Bearer ${authState.token}` }
-    });
+  const confirmPayment = async () => {
+    try {
+      if (!currentRequest) return;
 
-    if (verificationResponse.data.success) {
+      const response = await api.post('/tokens/confirm-payment', {
+        txRef: currentRequest.txRef,
+        paymentDetails: `Bank transfer to ${bankDetails.accountNumber}`
+      }, {
+        headers: { 
+          Authorization: `Bearer ${authState.token}`,
+          'Content-Type': 'application/json'
+        }
+      });
+
+      if (response.data.success) {
+        Alert.alert(
+          'Success', 
+          'Payment confirmation received. Your request is now pending admin approval.'
+        );
+        setShowPaymentModal(false);
+        fetchData();
+      } else {
+        throw new Error(response.data.message || 'Payment confirmation failed');
+      }
+    } catch (error: any) {
+      console.error('Payment confirmation error:', error);
       Alert.alert(
-        'Success', 
-        'Payment verified! Your token request is now pending admin approval.'
+        'Error',
+        error.response?.data?.message || error.message || 'Failed to confirm payment'
       );
-      fetchData(); // Refresh the token list
-    } else {
-      throw new Error(verificationResponse.data.message || 'Payment verification failed');
     }
-  } catch (error: any) {
-    console.error('Payment verification error:', error);
-    Alert.alert(
-      'Error',
-      error.response?.data?.message || error.message || 'Failed to verify payment'
-    );
-  }
-};
-
-  const handlePaymentClose = () => {
-    setShowPaymentModal(false);
-    Alert.alert('Info', 'Payment was not completed');
   };
 
-  const renderTokenSection = (title: string, tokens: Token[], status: string) => {
-    if (!tokens || tokens.length === 0) return null;
+  const cancelPayment = async () => {
+    try {
+      if (!currentRequest) return;
   
-    const statusColor = status === 'completed' ? '#4CAF50' : 
-                       status === 'failed' ? '#F44336' : '#FFA000';
+      const response = await api.post('/tokens/cancel-payment', {
+        txRef: currentRequest.txRef
+      }, {
+        headers: { 
+          Authorization: `Bearer ${authState.token}`,
+          'Content-Type': 'application/json'
+        }
+      });
+  
+      if (response.data.success) {
+        Alert.alert(
+          'Success', 
+          response.data.message || 'Token request cancelled successfully'
+        );
+        setShowPaymentModal(false);
+        fetchData();
+      } else {
+        throw new Error(response.data.message || 'Cancellation failed');
+      }
+    } catch (error: any) {
+      console.error('Payment cancellation error:', {
+        error: error.message,
+        response: error.response?.data,
+        status: error.response?.status,
+        config: error.config
+      });
+      
+      Alert.alert(
+        'Error',
+        error.response?.data?.message || 
+        error.message || 
+        'Failed to cancel payment. Please try again later.'
+      );
+    }
+  };
+
+  const copyToClipboard = (text: string) => {
+    Clipboard.setString(text);
+    Alert.alert('Copied', 'Account details copied to clipboard');
+  };
+
+  const openBankApp = () => {
+    Linking.openURL('bank://').catch(() => {
+      Alert.alert('Error', 'Could not open banking app');
+    });
+  };
+
+  const renderTokenCard = (token: Token) => {
+    const statusColor = token.status === 'issued' ? '#4CAF50' : '#FFA000';
   
     return (
-      <View style={styles.sectionContainer}>
-        <Text style={[styles.sectionTitle, { color: colors.onSurface }]}>
-          {title} ({tokens.length})
-        </Text>
-        {tokens.map(token => (
-          <Card key={token._id} style={[styles.tokenCard, { backgroundColor: colors.surface }]}>
-            <View style={styles.tokenHeader}>
-              <MaterialCommunityIcons name="flash" size={24} color={statusColor} />
-              <Text style={[styles.tokenStatus, { color: statusColor }]}>
-                {status.toUpperCase()}
+      <Card key={token._id} style={[styles.tokenCard, { backgroundColor: colors.surface }]}>
+        <View style={styles.tokenHeader}>
+          <MaterialCommunityIcons name="flash" size={24} color={statusColor} />
+          <Text style={[styles.tokenStatus, { color: statusColor }]}>
+            {token.status.toUpperCase()}
+          </Text>
+        </View>
+
+        <View style={styles.tokenDetails}>
+          <View style={styles.tokenRow}>
+            <Text style={[styles.tokenLabel, { color: colors.onSurface }]}>Amount:</Text>
+            <Text style={[styles.tokenValue, { color: colors.onSurface }]}> ₦{(token.amount).toLocaleString()}</Text>
+          </View>
+          <View style={styles.tokenRow}>
+            <Text style={[styles.tokenLabel, { color: colors.onSurface }]}>Disco:</Text>
+            <Text style={[styles.tokenValue, { color: colors.onSurface }]}>{token.disco}</Text>
+          </View>
+          <View style={styles.tokenRow}>
+            <Text style={[styles.tokenLabel, { color: colors.onSurface }]}>Units:</Text>
+            <Text style={[styles.tokenValue, { color: colors.onSurface }]}>{token.units}</Text>
+          </View>
+          <View style={styles.tokenRow}>
+            <Text style={[styles.tokenLabel, { color: colors.onSurface }]}>Meter:</Text>
+            <Text style={[styles.tokenValue, { color: colors.onSurface }]}>
+              {(token.meterNumber)}
+            </Text>
+          </View>
+          
+          {/* Verification Information Section */}
+          {token.customerVerification?.isVerified && (
+            <View style={styles.verificationSection}>
+              <Text style={[styles.verificationTitle, { color: colors.onSurface }]}>
+                Verification Details
               </Text>
-            </View>
-  
-            <View style={styles.tokenDetails}>
-              <View style={styles.tokenRow}>
-                <Text style={[styles.tokenLabel, { color: colors.onSurface }]}>Meter:</Text>
-                <Text style={[styles.tokenValue, { color: colors.onSurface }]}>{token.meterNumber}</Text>
-              </View>
-              <View style={styles.tokenRow}>
-                <Text style={[styles.tokenLabel, { color: colors.onSurface }]}>Disco:</Text>
-                <Text style={[styles.tokenValue, { color: colors.onSurface }]}>{token.disco}</Text>
-              </View>
-              <View style={styles.tokenRow}>
-                <Text style={[styles.tokenLabel, { color: colors.onSurface }]}>Units:</Text>
-                <Text style={[styles.tokenValue, { color: colors.onSurface }]}>{token.units}</Text>
-              </View>
-              <View style={styles.tokenRow}>
-                <Text style={[styles.tokenLabel, { color: colors.onSurface }]}>Amount:</Text>
-                <Text style={[styles.tokenValue, { color: colors.onSurface }]}>
-                  ₦{(token.amount).toLocaleString()}
-                </Text>
-              </View>
               
-              {/* Verification Information Section */}
-              {token.customerVerification?.isVerified && (
-                <View style={styles.verificationSection}>
-                  <Text style={[styles.verificationTitle, { color: colors.onSurface }]}>
-                    Verification Details
-                  </Text>
-                  
-                  {/* MTK1 */}
-                  {token.customerVerification.MTK1 && (
-                    <View style={styles.tokenRow}>
-                      <Text style={[styles.tokenLabel, { color: colors.onSurface }]}>MTK1:</Text>
-                      <Text style={[styles.tokenValue, { color: colors.onSurface }]}>
-                        {token.customerVerification.MTK1}
-                      </Text>
-                    </View>
-                  )}
-                  
-                  {/* MTK2 */}
-                  {token.customerVerification.MTK2 && (
-                    <View style={styles.tokenRow}>
-                      <Text style={[styles.tokenLabel, { color: colors.onSurface }]}>MTK2:</Text>
-                      <Text style={[styles.tokenValue, { color: colors.onSurface }]}>
-                        {token.customerVerification.MTK2}
-                      </Text>
-                    </View>
-                  )}
-
-
-{token.customerVerification.RTK1 && (
-                    <View style={styles.tokenRow}>
-                      <Text style={[styles.tokenLabel, { color: colors.onSurface }]}>RTK1:</Text>
-                      <Text style={[styles.tokenValue, { color: colors.onSurface }]}>
-                        {token.customerVerification.RTK1}
-                      </Text>
-                    </View>
-                  )}
-
-
-{token.customerVerification.RTK2 && (
-                    <View style={styles.tokenRow}>
-                      <Text style={[styles.tokenLabel, { color: colors.onSurface }]}>RTK2:</Text>
-                      <Text style={[styles.tokenValue, { color: colors.onSurface }]}>
-                        {token.customerVerification.RTK2}
-                      </Text>
-                    </View>
-                  )}
-
-                  
+              {/* MTK1 */}
+              {token.customerVerification.MTK1 && (
+                <View style={styles.tokenRow}>
+                  <Text style={[styles.tokenLabel, { color: colors.onSurface }]}>MTK1:</Text>
+                  <View style={styles.copyContainer}>
+                    <Text style={[styles.tokenValue, { color: colors.onSurface }]}>
+                      {token.customerVerification.MTK1}
+                    </Text>
+                    <IconButton 
+                      icon="content-copy" 
+                      size={20} 
+                      onPress={() => {
+                        Clipboard.setString(token.customerVerification?.MTK1 || '');
+                        Alert.alert('Copied', 'MTK1 copied to clipboard');
+                      }}
+                    />
+                  </View>
                 </View>
               )}
               
-              {/* Token Value Section */}
-              {token.tokenValue && (
+              {/* MTK2 */}
+              {token.customerVerification.MTK2 && (
+                <View style={styles.tokenRow}>
+                  <Text style={[styles.tokenLabel, { color: colors.onSurface }]}>MTK2:</Text>
+                  <View style={styles.copyContainer}>
+                    <Text style={[styles.tokenValue, { color: colors.onSurface }]}>
+                      {token.customerVerification.MTK2}
+                    </Text>
+                    <IconButton 
+                      icon="content-copy" 
+                      size={20} 
+                      onPress={() => {
+                        Clipboard.setString(token.customerVerification?.MTK2 || '');
+                        Alert.alert('Copied', 'MTK2 copied to clipboard');
+                      }}
+                    />
+                  </View>
+                </View>
+              )}
+
+              {/* RTK1 */}
+              {token.customerVerification.RTK1 && (
+                <View style={styles.tokenRow}>
+                  <Text style={[styles.tokenLabel, { color: colors.onSurface }]}>RTK1:</Text>
+                  <View style={styles.copyContainer}>
+                    <Text style={[styles.tokenValue, { color: colors.onSurface }]}>
+                      {token.customerVerification.RTK1}
+                    </Text>
+                    <IconButton 
+                      icon="content-copy" 
+                      size={20} 
+                      onPress={() => {
+                        Clipboard.setString(token.customerVerification?.RTK1 || '');
+                        Alert.alert('Copied', 'RTK1 copied to clipboard');
+                      }}
+                    />
+                  </View>
+                </View>
+              )}
+
+              {/* RTK2 */}
+              {token.customerVerification.RTK2 && (
+                <View style={styles.tokenRow}>
+                  <Text style={[styles.tokenLabel, { color: colors.onSurface }]}>RTK2:</Text>
+                  <View style={styles.copyContainer}>
+                    <Text style={[styles.tokenValue, { color: colors.onSurface }]}>
+                      {token.customerVerification.RTK2}
+                    </Text>
+                    <IconButton 
+                      icon="content-copy" 
+                      size={20} 
+                      onPress={() => {
+                        Clipboard.setString(token.customerVerification?.RTK2 || '');
+                        Alert.alert('Copied', 'RTK2 copied to clipboard');
+                      }}
+                    />
+                  </View>
+                </View>
+              )}
+            </View>
+          )}
+          
+          {/* Token Value Section */}
+          {token.tokenValue && (
                 <View style={styles.tokenValueSection}>
                   <Text style={[styles.tokenLabel, { color: colors.onSurface }]}>Token:</Text>
-                  <Text style={[styles.tokenValueLarge, { color: '#6200ee', fontWeight: 'bold' }]}>
-                    {token.tokenValue}
-                  </Text>
+                  <View style={styles.copyContainer}>
+                    <Text style={[styles.tokenValueLarge, { color: '#6200ee', fontWeight: 'bold' }]}>
+                      {token.tokenValue}
+                    </Text>
+                    <IconButton 
+                      icon="content-copy" 
+                      size={20} 
+                      onPress={() => {
+                        Clipboard.setString(token.tokenValue || '');
+                        Alert.alert('Copied', 'Token copied to clipboard');
+                      }}
+                    />
+                  </View>
                 </View>
               )}
-            </View>
-  
-            <Text style={[styles.tokenDate, { color: colors.onSurface }]}>
-              {new Date(token.createdAt).toLocaleString()}
-            </Text>
-          </Card>
-        ))}
-      </View>
+        </View>
+
+        <Text style={[styles.tokenDate, { color: colors.onSurface }]}>
+          {new Date(token.createdAt).toLocaleString()}
+        </Text>
+      </Card>
     );
   };
-  const issuedTokens = filteredTokens.filter(t => t.status === 'issued');
-  const usedTokens = filteredTokens.filter(t => t.status === 'used');
-  const expiredTokens = filteredTokens.filter(t => t.status === 'expired');
-  const pendingTokens = filteredTokens.filter(t => t.status === 'pending');
+
+  const renderRequestHistory = () => {
+    return (
+      <ScrollView
+        style={styles.content}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+          />
+        }
+      >
+        <Card style={[styles.formCard, { backgroundColor: colors.surface }]}>
+          <Text style={[styles.formTitle, { color: colors.onSurface }]}>
+            Pending/Rejected Requests
+          </Text>
+          
+          {historyLoading ? (
+            <ActivityIndicator style={styles.loader} animating={true} />
+          ) : requestHistory.length === 0 ? (
+            <Text style={[styles.emptyText, { color: colors.onSurface }]}>
+              No pending or rejected requests found
+            </Text>
+          ) : (
+            <>
+              <DataTable>
+                <DataTable.Header>
+                  <DataTable.Title style={styles.tableCell}>Meter No.</DataTable.Title>
+                  <DataTable.Title numeric style={styles.tableCell}>Units</DataTable.Title>
+                  <DataTable.Title numeric style={styles.tableCell}>Amount</DataTable.Title>
+                  <DataTable.Title style={styles.tableCell}>Status</DataTable.Title>
+                </DataTable.Header>
+
+                {requestHistory.map((request) => (
+                  <DataTable.Row key={request._id}>
+                    <DataTable.Cell style={styles.tableCell}>{request.meterNumber}</DataTable.Cell>
+                    <DataTable.Cell numeric style={styles.tableCell}>{request.units}</DataTable.Cell>
+                    <DataTable.Cell numeric style={styles.tableCell}>₦{request.amount.toLocaleString()}</DataTable.Cell>
+                    <DataTable.Cell style={styles.tableCell}>
+                      <Text 
+                        style={{ 
+                          color: request.status === 'pending' ? '#FFA000' : '#F44336',
+                          fontWeight: 'bold'
+                        }}
+                      >
+                        {request.status.toUpperCase()}
+                      </Text>
+                    </DataTable.Cell>
+                  </DataTable.Row>
+                ))}
+
+                <DataTable.Pagination
+                  page={historyPage}
+                  numberOfPages={Math.ceil(requestHistory.length / itemsPerPage)}
+                  onPageChange={(page) => setHistoryPage(page)}
+                  label={`${historyPage * itemsPerPage + 1}-${Math.min(
+                    (historyPage + 1) * itemsPerPage,
+                    requestHistory.length
+                  )} of ${requestHistory.length}`}
+                  showFastPaginationControls
+                  numberOfItemsPerPage={itemsPerPage}
+                  selectPageDropdownLabel={'Rows per page'}
+                />
+              </DataTable>
+            </>
+          )}
+        </Card>
+
+        <Card style={[styles.formCard, { backgroundColor: colors.surface }]}>
+          <Text style={[styles.formTitle, { color: colors.onSurface }]}>
+            Issued Tokens
+          </Text>
+          
+          {issuedTokensLoading ? (
+            <ActivityIndicator style={styles.loader} animating={true} />
+          ) : issuedTokensHistory.length === 0 ? (
+            <Text style={[styles.emptyText, { color: colors.onSurface }]}>
+              No issued tokens found
+            </Text>
+          ) : (
+            <>
+              <DataTable>
+                <DataTable.Header>
+                  <DataTable.Title style={styles.tableCell}>Meter No.</DataTable.Title>
+                  <DataTable.Title numeric style={styles.tableCell}>Units</DataTable.Title>
+                  <DataTable.Title numeric style={styles.tableCell}>Amount</DataTable.Title>
+                  <DataTable.Title style={styles.tableCell}>Token</DataTable.Title>
+                </DataTable.Header>
+
+                {issuedTokensHistory.map((token) => (
+                  <DataTable.Row key={token._id}>
+                    <DataTable.Cell style={styles.tableCell}>{token.meterNumber}</DataTable.Cell>
+                    <DataTable.Cell numeric style={styles.tableCell}>{token.units}</DataTable.Cell>
+                    <DataTable.Cell numeric style={styles.tableCell}>₦{token.amount.toLocaleString()}</DataTable.Cell>
+                    <DataTable.Cell style={styles.tableCell}>
+                      {token.status ? (
+                        <TouchableOpacity onPress={() => {
+                          Clipboard.setString(token.token || '');
+                          Alert.alert('Copied', 'Token copied to clipboard');
+                        }}>
+                          <Text style={{ color: '#6200ee', fontWeight: 'bold' }}>
+                            {token.status}
+                          </Text>
+                        </TouchableOpacity>
+                      ) : 'N/A'}
+                    </DataTable.Cell>
+                  </DataTable.Row>
+                ))}
+
+                <DataTable.Pagination
+                  page={issuedTokensPage}
+                  numberOfPages={Math.ceil(issuedTokensHistory.length / itemsPerPage)}
+                  onPageChange={(page) => setIssuedTokensPage(page)}
+                  label={`${issuedTokensPage * itemsPerPage + 1}-${Math.min(
+                    (issuedTokensPage + 1) * itemsPerPage,
+                    issuedTokensHistory.length
+                  )} of ${issuedTokensHistory.length}`}
+                  showFastPaginationControls
+                  numberOfItemsPerPage={itemsPerPage}
+                  selectPageDropdownLabel={'Rows per page'}
+                />
+              </DataTable>
+            </>
+          )}
+        </Card>
+      </ScrollView>
+    );
+  };
+
+  const paginatedTokens = filteredTokens.slice(
+    tokenSearchPage * itemsPerPage,
+    (tokenSearchPage + 1) * itemsPerPage
+  );
 
   return (
     <View style={[styles.container, { backgroundColor: colors.background }]}>
@@ -512,6 +862,14 @@ const handlePaymentSuccess = async (response: any) => {
         >
           <Text style={[styles.tabText, activeTab === 'view' && styles.activeTabText]}>
             View Tokens
+          </Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={[styles.tabButton, activeTab === 'history' && styles.activeTab]}
+          onPress={() => setActiveTab('history')}
+        >
+          <Text style={[styles.tabText, activeTab === 'history' && styles.activeTabText]}>
+            Request History
           </Text>
         </TouchableOpacity>
       </View>
@@ -637,7 +995,7 @@ const handlePaymentSuccess = async (response: any) => {
 
             <Button
               mode="contained"
-              onPress={initiatePaystackPayment}
+              onPress={initiateManualPayment}
               loading={paymentInProgress}
               disabled={paymentInProgress || !formData.disco}
               style={styles.submitButton}
@@ -655,7 +1013,7 @@ const handlePaymentSuccess = async (response: any) => {
             </Button>
           </Card>
         </ScrollView>
-      ) : (
+      ) : activeTab === 'view' ? (
         <ScrollView
           style={styles.content}
           refreshControl={
@@ -703,52 +1061,202 @@ const handlePaymentSuccess = async (response: any) => {
 
           {loading && !refreshing ? (
             <ActivityIndicator style={styles.loader} animating={true} />
-          ) : filteredTokens.length === 0 ? (
+          ) : hasSearched && filteredTokens.length === 0 ? (
             <Text style={[styles.emptyText, { color: colors.onSurface }]}>
-              {tokenSearchQuery ? 'No tokens found for this meter number' : 'No tokens found'}
+              No issued tokens found for this meter number
             </Text>
-          ) : (
+          ) : hasSearched ? (
             <>
-              {tokenSearchQuery && (
-                <Text style={[styles.searchResultsText, { color: colors.onSurface }]}>
-                  Showing latest 5 tokens for: {tokenSearchQuery}
+              <Card style={[styles.formCard, { backgroundColor: colors.surface }]}>
+                <Text style={[styles.formTitle, { color: colors.onSurface }]}>
+                  Search Results ({filteredTokens.length})
                 </Text>
-              )}
-              {renderTokenSection('Issued Tokens', issuedTokens, 'issued')}
-              {renderTokenSection('Pending Tokens', pendingTokens, 'pending')}
-              {renderTokenSection('Used Tokens', usedTokens, 'used')}
-              {renderTokenSection('Expired Tokens', expiredTokens, 'expired')}
+                
+                {paginatedTokens.map(token => renderTokenCard(token))}
+                
+                <DataTable.Pagination
+                  page={tokenSearchPage}
+                  numberOfPages={Math.ceil(filteredTokens.length / itemsPerPage)}
+                  onPageChange={(page) => setTokenSearchPage(page)}
+                  label={`${tokenSearchPage * itemsPerPage + 1}-${Math.min(
+                    (tokenSearchPage + 1) * itemsPerPage,
+                    filteredTokens.length
+                  )} of ${filteredTokens.length}`}
+                  showFastPaginationControls
+                  numberOfItemsPerPage={itemsPerPage}
+                  selectPageDropdownLabel={'Rows per page'}
+                />
+              </Card>
             </>
+          ) : (
+            <Text style={[styles.emptyText, { color: colors.onSurface }]}>
+              Search for tokens by meter number
+            </Text>
           )}
         </ScrollView>
+      ) : (
+        renderRequestHistory()
       )}
 
       <Modal
         visible={showPaymentModal}
-        onRequestClose={handlePaymentClose}
+        onRequestClose={() => setShowPaymentModal(false)}
         animationType="slide"
-        transparent={false}
       >
-        <View style={{ flex: 1 }}>
-          <Paystack
-            paystackKey={process.env.PAYSTACK_PUBLIC_KEY || 'pk_live_a6f3b0e8c22139d28b055058d5226cd202b09fd1'}
-            billingEmail={authState.userData?.email || 'customer@example.com'}
-            amount={paystackAmount}
-            currency="NGN"
-            channels={['card', 'bank', 'ussd', 'qr', 'mobile_money']}
-            refNumber={paystackReference}
-            onCancel={handlePaymentClose}
-            onSuccess={handlePaymentSuccess}
-            autoStart={true}
-            ref={paystackWebViewRef}
-            style={{ flex: 1 }}
-          />
-          <Button 
-            mode="contained" 
-            onPress={handlePaymentClose}
-            style={styles.closeButton}
+        <View style={[styles.paymentModalContainer, { backgroundColor: colors.background }]}>
+          <Text style={[styles.paymentTitle, { color: colors.onSurface }]}>Manual Payment Instructions</Text>
+          
+          <Card style={[styles.paymentCard, { backgroundColor: colors.surface }]}>
+            {loadingBankDetails ? (
+              <View style={styles.loadingContainer}>
+                <ActivityIndicator animating={true} size="large" />
+                <Text style={[styles.loadingText, { color: colors.onSurface }]}>
+                  Loading bank details...
+                </Text>
+              </View>
+            ) : bankDetails ? (
+              <>
+                <Text style={[styles.paymentText, { color: colors.onSurface }]}>
+                  Please make payment to the following account details:
+                </Text>
+                
+                <View style={styles.paymentDetailRow}>
+                  <Text style={[styles.paymentLabel, { color: colors.onSurface }]}>Bank Name:</Text>
+                  <View style={styles.copyContainer}>
+                    <Text style={[styles.paymentValue, { color: colors.onSurface }]}>{bankDetails.bankName}</Text>
+                    <IconButton 
+                      icon="content-copy" 
+                      size={20} 
+                      onPress={() => copyToClipboard(bankDetails.bankName)}
+                    />
+                  </View>
+                </View>
+                
+                <View style={styles.paymentDetailRow}>
+                  <Text style={[styles.paymentLabel, { color: colors.onSurface }]}>Account Number:</Text>
+                  <View style={styles.copyContainer}>
+                    <Text style={[styles.paymentValue, { color: colors.onSurface }]}>{bankDetails.accountNumber}</Text>
+                    <IconButton 
+                      icon="content-copy" 
+                      size={20} 
+                      onPress={() => copyToClipboard(bankDetails.accountNumber)}
+                    />
+                  </View>
+                </View>
+                
+                <View style={styles.paymentDetailRow}>
+                  <Text style={[styles.paymentLabel, { color: colors.onSurface }]}>Account Name:</Text>
+                  <View style={styles.copyContainer}>
+                    <Text style={[styles.paymentValue, { color: colors.onSurface }]}>{bankDetails.accountName}</Text>
+                    <IconButton 
+                      icon="content-copy" 
+                      size={20} 
+                      onPress={() => copyToClipboard(bankDetails.accountName)}
+                    />
+                  </View>
+                </View>
+                
+                <View style={styles.paymentDetailRow}>
+                  <Text style={[styles.paymentLabel, { color: colors.onSurface }]}>Amount:</Text>
+                  <Text style={[styles.paymentValue, { color: colors.onSurface }]}>
+                    ₦{currentRequest?.amount.toLocaleString()}
+                  </Text>
+                </View>
+                
+                <View style={styles.paymentDetailRow}>
+                  <Text style={[styles.paymentLabel, { color: colors.onSurface }]}>Reference:</Text>
+                  <View style={styles.copyContainer}>
+                    <Text style={[styles.paymentValue, { color: colors.onSurface }]}>{currentRequest?.txRef}</Text>
+                    <IconButton 
+                      icon="content-copy" 
+                      size={20} 
+                      onPress={() => currentRequest?.txRef && copyToClipboard(currentRequest.txRef)}
+                    />
+                  </View>
+                </View>
+                
+                <Text style={[styles.paymentNote, { color: colors.onSurface }]}>
+                  Please input <Text style={{ fontWeight: 'bold' }}>Meter Number ({currentRequest?.meterNumber})</Text>   <IconButton 
+                      icon="content-copy" 
+                      size={20} 
+                      onPress={() => currentRequest?.meterNumber && copyToClipboard(currentRequest.meterNumber)}
+                    />  as reference when making payment.
+                </Text>
+
+                
+              </>
+            ) : (
+              <View style={styles.errorContainer}>
+                <MaterialCommunityIcons 
+                  name="alert-circle" 
+                  size={40} 
+                  color={colors.error} 
+                  style={styles.errorIcon}
+                />
+                <Text style={[styles.errorText, { color: colors.onSurface }]}>
+                  Failed to load bank details. Please try again later.
+                </Text>
+                <Button
+                  mode="contained"
+                  onPress={fetchBankAccount}
+                  style={styles.retryButton}
+                >
+                  Retry
+                </Button>
+              </View>
+            )}
+
+            {bankDetails && (
+              <Text style={[styles.paymentNote, { color: colors.onSurface }]}>
+                After making payment, click the button below to notify us.
+                Your token will be issued after payment confirmation.
+              </Text>
+            )}
+          </Card>
+
+          {bankDetails && (
+            <>
+              <Button
+                mode="contained"
+                onPress={openBankApp}
+                style={styles.bankAppButton}
+                icon="bank"
+              >
+                Open Banking App
+              </Button>
+
+              <Button
+                mode="contained"
+                onPress={confirmPayment}
+                style={styles.confirmPaymentButton}
+              >
+                I Have Made Payment
+              </Button>
+            </>
+          )}
+          
+          <Button
+            mode="outlined"
+            onPress={() => {
+              Alert.alert(
+                'Confirm Cancellation',
+                'Are you sure you want to cancel this payment request?',
+                [
+                  {
+                    text: 'No',
+                    style: 'cancel',
+                  },
+                  {
+                    text: 'Yes',
+                    onPress: cancelPayment,
+                  },
+                ],
+                { cancelable: true }
+              );
+            }}
+            style={styles.cancelPaymentButton}
           >
-            Close Payment
+            Cancel
           </Button>
         </View>
       </Modal>
@@ -816,6 +1324,29 @@ const styles = StyleSheet.create({
   searchContainer: {
     flexDirection: 'row',
     alignItems: 'center',
+  },
+  loadingContainer: {
+    alignItems: 'center',
+    padding: 20,
+  },
+  loadingText: {
+    marginTop: 10,
+    fontSize: 16,
+  },
+  errorContainer: {
+    alignItems: 'center',
+    padding: 20,
+  },
+  errorIcon: {
+    marginBottom: 10,
+  },
+  errorText: {
+    textAlign: 'center',
+    marginBottom: 15,
+    fontSize: 16,
+  },
+  retryButton: {
+    marginTop: 10,
   },
   searchInput: {
     flex: 1,
@@ -969,6 +1500,64 @@ const styles = StyleSheet.create({
     width: '80%',
     borderRadius: 8,
   },
+  paymentModalContainer: {
+    flex: 1,
+    padding: 20,
+  },
+  paymentTitle: {
+    fontSize: 20,
+    fontWeight: 'bold',
+    marginBottom: 20,
+    textAlign: 'center'
+  },
+  paymentCard: {
+    padding: 20,
+    marginBottom: 20
+  },
+  paymentText: {
+    fontSize: 16,
+    marginBottom: 15
+  },
+  paymentDetailRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginBottom: 10,
+    alignItems: 'center'
+  },
+  copyContainer: {
+    flexDirection: 'row',
+    alignItems: 'center'
+  },
+  paymentLabel: {
+    fontWeight: 'bold',
+    fontSize: 16
+  },
+  paymentValue: {
+    fontSize: 16,
+    marginRight: 8
+  },
+  paymentNote: {
+    marginTop: 15,
+    fontStyle: 'italic',
+    color: '#666'
+  },
+  bankAppButton: {
+    marginTop: 10,
+    paddingVertical: 8,
+    backgroundColor: '#4CAF50'
+  },
+  confirmPaymentButton: {
+    marginTop: 10,
+    paddingVertical: 8
+  },
+  cancelPaymentButton: {
+    marginTop: 10,
+    paddingVertical: 8
+  },
+  tableCell: {
+    flex: 1,  
+    justifyContent: 'center'
+  }
 });
 
 export default VendorTokenScreen;
