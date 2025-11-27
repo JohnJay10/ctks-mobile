@@ -4,9 +4,9 @@ import * as SecureStore from 'expo-secure-store';
 import { Platform } from 'react-native';
 
 // Use the same IP address as your AuthContext
-const LOCAL_IP = '192.168.0.120'; // Make sure this matches your computer's IP
+const LOCAL_IP = '192.168.100.16'; // Make sure this matches your computer's IP
 
-// Determine the correct base URL based on the platform
+// Determine the correct base URL based on the environment
 const getBaseUrl = () => {
   if (__DEV__) {
     /**
@@ -19,19 +19,32 @@ const getBaseUrl = () => {
       default: `http://${LOCAL_IP}:3000/api` // Fallback for physical devices
     });
   }
-  return 'https://your-production-api.com/api';
+  // Production URL
+  return 'https://ctks.onrender.com/api';
 };
 
-// Alternative simpler approach - use your computer's IP for all devices on same network
-const getSimpleBaseUrl = () => {
-  if (__DEV__) {
-    return `http://${LOCAL_IP}:3000/api`;
+// Alternative: Environment-based configuration
+const getEnvironmentBaseUrl = () => {
+  // You can also use environment variables
+  const environment = process.env.NODE_ENV || 'development';
+  
+  switch (environment) {
+    case 'production':
+      return 'https://ctks.onrender.com/api';
+    case 'staging':
+      return 'https://ctks-staging.onrender.com/api'; // If you have staging
+    case 'development':
+    default:
+      return Platform.select({
+        android: 'http://10.0.2.2:3000/api',
+        ios: 'http://localhost:3000/api',
+        default: `http://${LOCAL_IP}:3000/api`
+      });
   }
-  return 'https://your-production-api.com/api';
 };
 
 const api = axios.create({
-  baseURL: getSimpleBaseUrl(), // Use the simple approach for consistency
+  baseURL: getBaseUrl(), // Use the main function
   timeout: 15000, // Increased timeout for mobile networks
   headers: {
     'Content-Type': 'application/json',
@@ -39,7 +52,7 @@ const api = axios.create({
   }
 });
 
-// Add request interceptor to inject auth token - FIXED TOKEN KEY
+// Add request interceptor to inject auth token
 api.interceptors.request.use(async (config) => {
   try {
     // Use the same token key as your AuthContext
@@ -85,4 +98,6 @@ api.interceptors.response.use(
   }
 );
 
+// Export the base URL for use in other parts of your app
+export const API_BASE_URL = getBaseUrl();
 export default api;

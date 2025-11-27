@@ -2,7 +2,6 @@
   "expo": {
     "name": "CTKS-Mobile",
     "slug": "CTKS-Mobile",
-  
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/logo.png",
@@ -15,17 +14,16 @@
     },
     "ios": {
       "supportsTablet": true,
-      "newArchEnabled": false
+      "newArchEnabled": true
     },
     "android": {
       "adaptiveIcon": {
         "foregroundImage": "./assets/logo.png",
         "backgroundColor": "#ffffff"
-       
       },
       "package": "com.johnjay100.CTKSMobile",
       "softwareKeyboardLayoutMode": "resize",
-      "newArchEnabled": false
+      "newArchEnabled": true
     },
     "web": {
       "favicon": "./assets/favicon.png"
@@ -38,7 +36,7 @@
           "android": {
             "enableProguardInReleaseBuilds": true,
             "usesCleartextTraffic": true,
-            "newArchEnabled": false,
+            "newArchEnabled": true,
             "packagingOptions": {
               "pickFirst": [
                 "**/libc++_shared.so",
@@ -51,10 +49,11 @@
           },
           "ios": {
             "useFrameworks": "static",
-            "newArchEnabled": false
+            "newArchEnabled": true
           }
         }
-      ]
+      ],
+      "expo-font"
     ]
   }
 }
